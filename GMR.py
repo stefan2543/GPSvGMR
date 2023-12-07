@@ -1,8 +1,8 @@
+import comet_ml
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import comet_ml
 from comet_ml.integration.gymnasium import CometLogger
 from stable_baselines3 import A2C
 import gymnasium as gym
@@ -35,12 +35,14 @@ class Translator(nn.Module):
     def __init__(self, latent_dim=5, output_dim=3):
         super(Translator, self).__init__()
         self.fc1 = nn.Linear(latent_dim, 64)
-        self.fc2 = nn.Linear(64, output_dim)
+        self.fc2 = nn.Linear(64, 2)
+        self.fc3 = nn.Linear(64, 11) 
 
     def forward(self, z):
         z = F.relu(self.fc1(z))
-        psi_params = self.fc2(z)
-        return psi_params
+        psi_params_array = self.fc3(z)
+        psi_params_scalar = self.fc2(z)
+        return psi_params_array, psi_params_scalar
 
 class VAE(nn.Module):
     def __init__(self, input_dim=11, latent_dim=5, output_dim=3):
@@ -58,8 +60,8 @@ class VAE(nn.Module):
         mean, logvar = self.encoder(x)
         z = self.reparameterize(mean, logvar)
         x_hat = self.decoder(z)
-        psi_params = self.translator(z)
-        return x_hat, mean, logvar, psi_params
+        psi_params_array, psi_params_scalar = self.translator(z)
+        return x_hat, mean, logvar, psi_params_array, psi_params_scalar
 
 # Instantiate the GMR model
 vae = VAE()
@@ -73,7 +75,7 @@ beta = 0.01
 mse_loss = torch.nn.MSELoss()
 
 # Training loop
-num_epochs = 100
+num_epochs = 10
 
 env = gym.make('InvertedDoublePendulum-v4')
 model = A2C.load("/work/06970/scr2543/ls6/gym/models/a2c2")
@@ -89,7 +91,7 @@ for episode in range(num_episodes):
     while True:
         action, _ = model.predict(state, deterministic=True)
         states.append(state)
-        actions.append([state,action[0]])
+        actions.append(action)
         # Perform the action and observe the next state and reward
         next_state, reward, done, _, _ = env.step(action)
         # Update the state for the next iteration
@@ -103,15 +105,17 @@ for epoch in range(num_epochs):
 
     for i in range(len(actions)):  # iterate over your dataset
         optimizer.zero_grad()
-        x = states[0]
-        u = actions[0]
+        x = states[i]
+        x = torch.tensor(x, dtype=torch.float32)
+        u = actions[i]
+        u = torch.tensor(u, dtype=torch.float32)
         # Forward pass
-        x_hat, mean, logvar, psi_params_pred = vae(x)
+        x_hat, mean, logvar, psi_params_pred_array, psi_params_pred_scalar = vae(x)
 
         # Compute losses
         reconstruction_loss = mse_loss(x, x_hat)
         kl_divergence = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp())
-        pred_u = torch.normal(mean=(psi_params_pred[0]*x+psi_params_pred[1]), std=psi_params_pred[2], size=1)
+        pred_u = torch.normal(mean=(psi_params_pred_array @ x + psi_params_pred_scalar[0]), std=torch.abs(psi_params_pred_scalar[1]))
         control_loss = mse_loss(pred_u, u)
         regularization_loss = sum(p.pow(2).sum() for p in vae.parameters())
 
@@ -124,7 +128,7 @@ for epoch in range(num_epochs):
         total_loss += gmr_loss.item()
 
     # Print average loss for the epoch
-    print(f"Epoch {epoch+1}, Loss: {total_loss / len(dataset)}")
+    print(f"Epoch {epoch+1}, Loss: {total_loss / len(actions)}")
 
 # Set the model in evaluation mode
 vae.eval()
@@ -136,11 +140,11 @@ num_episodes = 100
 for episode in range(num_episodes):
     state, _  = env.reset()  # Reset the environment at the beginning of each episode
     while True:
-        x_hat, mean, logvar, psi_params_pred = vae(state)
-        action = torch.normal(mean=(psi_params[0]*x+psi_params[1]), std=psi_params[2], size=1)
-        print(action)
+        state = torch.tensor(state, dtype=torch.float32)
+        x_hat, mean, logvar, psi_params_pred_array, psi_params_pred_scalar = vae(state)
+        action = torch.normal(mean=(psi_params_pred_array @ x + psi_params_pred_scalar[0]), std=torch.abs(psi_params_pred_scalar[1]))
         # Perform the action and observe the next state and reward
-        next_state, reward, done, _, _ = env.step(action)
+        next_state, reward, done, _, _ = env.step([action.item()])
 
 
         # Update the state for the next iteration
