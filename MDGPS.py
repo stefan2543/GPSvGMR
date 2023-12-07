@@ -198,13 +198,14 @@ for iteration in range(num_iterations):
                     'actions': np.zeros((num_trajectories, trajectory_length, action_dim))}
     for i in range(num_trajectories):
         state = np.zeros((trajectory_length, state_dim))
-        action = np.zeros((trajectory_length, action_dim))
+        actions = np.zeros((trajectory_length, action_dim))
         next_state, _ = env.reset()
         t = 0
         
         while True:
             state[t] = next_state
             action = np.random.multivariate_normal(policy_mean[t], policy_covariance, 1)
+            actions[t] = action[0]
             t += 1
             next_state, reward, done, _, _ = env.step(action[0])
             if done:
@@ -212,7 +213,7 @@ for iteration in range(num_iterations):
         state[t] = next_state
 
         trajectories['states'][i] = state
-        trajectories['actions'][i] = action
+        trajectories['actions'][i] = actions
     
     # Perform c1-step LQR backward
     lqr_gains = lqr_backward(trajectories, policy_mean, policy_covariance, lambda_values)
